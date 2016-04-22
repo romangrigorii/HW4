@@ -39,16 +39,14 @@
 #pragma config FVBUSONIO = ON // USB BUSON controlled by USB module
 
 #define CS LATBbits.LATB7
-#define SLAVE_ADDR 0x20
+#define SLAVE_ADDR 0x40 // A0=A1=A2=0
 
 void initSPI1(){
-    //SPI1BUF; // clear rx buffer by reading from it
     SPI1BRG = 0xF; // baud rate unknown 
     SPI1STATbits.SPIROV = 0; // clear overflow
     SPI1CONbits.ON = 1; // SPI peripheral enable
     SPI1CONbits.CKE = 1; // the output data changes from clock active -> idle
     SPI1CONbits.MSTEN = 1; // Master Enable
-    
     TRISBbits.TRISB7 = 0;
     TRISBbits.TRISB8 = 0;
     RPB7Rbits.RPB7R = 0b0011; // Set B7 to be SS1
@@ -56,50 +54,56 @@ void initSPI1(){
 }
 
 void initI2C2(){
-  __builtin_disable_interrupts();
-  i2c_master_setup();
-  ANSELBbits.ANSB2 = 0;
-  __builtin_enable_interrupts();
+    __builtin_disable_interrupts();
+    i2c_master_setup();
+    __builtin_enable_interrupts();
 }
 void initExpender(){
-    char garbage;
-        i2c_master_start();
-        i2c_master_send((SLAVE_ADDR << 1));
-        i2c_master_send(0x00); 
-        i2c_master_send(011111111);  
-        /*
-        i2c_master_restart();
-        i2c_master_send((SLAVE_ADDR << 1) | 1);
-        garbage = i2c_master_recv();
-        i2c_master_ack(0);
-        garbage = i2c_master_recv();
-        i2c_master_ack(1);
-         * */
-        i2c_master_stop();   
+    i2c_master_start();
+    i2c_master_send(0x40);
+    i2c_master_send(0x0); 
+    i2c_master_send(0b11110000);  
+    i2c_master_stop();   
 }
 
 void setExpender(char pin, char level){
-    char garbage;
-        i2c_master_start();
-        i2c_master_send((SLAVE_ADDR << 1));
-        i2c_master_send(0x09); 
-        i2c_master_send(0b11110000);  
-        /*
-        i2c_master_restart();
-        i2c_master_send((SLAVE_ADDR << 1) | 1);
-        garbage = i2c_master_recv();
-        i2c_master_ack(0);
-        garbage = i2c_master_recv();
-        i2c_master_ack(1);
-         * */
-        i2c_master_stop();    
+    i2c_master_start();
+    i2c_master_send(SLAVE_ADDR);
+    i2c_master_send(pin); 
+    i2c_master_send(level);  
+    i2c_master_stop();    
  }
+unsigned char getExpender(){
+    unsigned char read;
+    i2c_master_start();
+    i2c_master_send(0x40);
+    i2c_master_send(0x09); 
+    i2c_master_restart();
+    i2c_master_send(0x41);
+    read = i2c_master_recv();
+    i2c_master_ack(1);
+    i2c_master_stop();
+    return read;
+}
+
+unsigned char getSetExpender(char pin, char level){
+    unsigned char read;
+    i2c_master_start();
+    i2c_master_send(0x40);
+    i2c_master_send(pin); 
+    i2c_master_send(level);  
+    i2c_master_restart();
+    i2c_master_send(0x41);
+    read = i2c_master_recv();
+    i2c_master_ack(1);
+    i2c_master_stop();
+    return read;
+}
 
 char SPI1_IO(char write){
   SPI1BUF = write;
   while(SPI1STATbits.SPIBUSY) {
     ;
-    //SPI1STATbits.SPIRBF
   }
   return SPI1BUF;
 }
@@ -123,12 +127,10 @@ void setVoltage(char channel, char voltage){
 
 
 int main() {
-    
-  unsigned char master_write0 = 0xCD;       // first byte that master writes
-  unsigned char master_write1 = 0xFF;       // second byte that master writes
-  unsigned char master_read0  = 0x00;       // first received byte
-  unsigned char master_read1  = 0x00;       // second received byte
-     __builtin_disable_interrupts();
+    unsigned char outhigh = 0b00000101;
+    unsigned char outlow = 0b00000010;
+    unsigned char out;
+    __builtin_disable_interrupts();
     // set the CP0 CONFIG register to indicate that kseg0 is cacheable (0x3)
     __builtin_mtc0(_CP0_CONFIG, _CP0_CONFIG_SELECT, 0xa4210583);
     // 0 data RAM access wait states
@@ -141,11 +143,13 @@ int main() {
     TRISAbits.TRISA4 = 0;
     TRISBbits.TRISB4 = 1;
     //ODCBbits.ODCB4 = 0;
-    int u = 0, i = 0;
+    unsigned int u = 0;
+    unsigned int i = 0;
     initSPI1();
     initI2C2();
     initExpender();
     while(1){
+        
         if(u == 100){
             u = 0;
         }
@@ -153,14 +157,20 @@ int main() {
             i = 0;
         }
         while(!PORTBbits.RB4){
+            setExpender(0x0A,outlow);
         }
         LATAbits.LATA4 = !LATAbits.LATA4;
         _CP0_SET_COUNT(0);
         while(_CP0_GET_COUNT()<48000){
         }
-        setExpender(1,1);
+        if ((getExpender() >> 7) == 1){
+            setExpender(0x0A,outhigh);
+        }
+        else{
+            setExpender(0x0A,outlow);
+        }
         setVoltage(0, 64 + 63*sin(((double) i)*2*3.14159/50));
-        setVoltage(1, u*127/100);
+        setVoltage(1, u*128/100);
         u++;
         i++;
     }
